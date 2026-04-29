@@ -16,16 +16,18 @@ the cursor as ``@``.  Commands are typed and submitted with Enter.
 
 from __future__ import annotations
 
+import argparse
 import os
 import random
 import sys
+from pathlib import Path
 from typing import List, Optional, Tuple
 
-# Make ``import src...`` work regardless of where the script is launched.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.board import Board  # noqa: E402
 from src.game.engine import Engine  # noqa: E402
+from src.game.log import GameLog  # noqa: E402
 from src.setup import Setup  # noqa: E402
 from src.ship import EAST, NORTH, SOUTH, WEST  # noqa: E402
 
@@ -80,8 +82,15 @@ def choose_mode() -> str:
         print("Please enter 1 or 2.")
 
 
-def auto_place(setup: Setup, rng: Optional[random.Random] = None) -> None:
-    """Randomly place every remaining ship."""
+def auto_place(
+    setup: Setup,
+    rng: Optional[random.Random] = None,
+    *,
+    log: Optional[GameLog] = None,
+    player: Optional[int] = None,
+    player_name: Optional[str] = None,
+) -> None:
+    """Randomly place every remaining ship and optionally log each placement."""
     rng = rng or random.Random()
     size = setup.board.size
     while not setup.done:
@@ -92,7 +101,20 @@ def auto_place(setup: Setup, rng: Optional[random.Random] = None) -> None:
             ship.anchor = (rng.randrange(size), rng.randrange(size))
             if setup.board.can_place(ship):
                 setup.cursor = ship.anchor
+                cells = ship.cells()
                 if setup.commit_ship():
+                    if log is not None:
+                        log.append(
+                            "placement",
+                            player=player,
+                            player_name=player_name,
+                            ship=ship.name,
+                            length=ship.length,
+                            anchor=list(ship.anchor),
+                            orientation=ship.orientation,
+                            cells=[list(c) for c in cells],
+                            method="auto",
+                        )
                     break
         else:
             raise RuntimeError(f"could not auto-place {ship.name}")
@@ -112,15 +134,34 @@ def render_placement(setup: Setup, player_name: str) -> None:
         print("Type 'help' for controls.")
 
 
-def human_placement(player_name: str) -> Board:
+def human_placement(
+    player_name: str,
+    *,
+    log: Optional[GameLog] = None,
+    player: Optional[int] = None,
+) -> Board:
     setup = Setup()
     print(f"\n{player_name}, place your fleet. Type 'auto' for random placement.")
     while not setup.done:
         render_placement(setup, player_name)
         cmd = prompt("> ").lower()
         if cmd in ("", "p", "place", "enter"):
+            ship = setup.current_ship
+            cells = list(ship.cells()) if ship is not None else []
             if not setup.commit_ship():
                 print("Cannot place there: out of bounds or overlapping.")
+            elif log is not None and ship is not None:
+                log.append(
+                    "placement",
+                    player=player,
+                    player_name=player_name,
+                    ship=ship.name,
+                    length=ship.length,
+                    anchor=list(ship.anchor),
+                    orientation=ship.orientation,
+                    cells=[list(c) for c in cells],
+                    method="manual",
+                )
             continue
         if cmd in ("up", "down", "left", "right"):
             setup.move_cursor(cmd)
@@ -129,7 +170,7 @@ def human_placement(player_name: str) -> Board:
             setup.rotate_current(cmd)
             continue
         if cmd == "auto":
-            auto_place(setup)
+            auto_place(setup, log=log, player=player, player_name=player_name)
             continue
         if cmd == "show":
             continue
@@ -144,9 +185,15 @@ def human_placement(player_name: str) -> Board:
     return setup.board
 
 
-def ai_placement() -> Board:
+def ai_placement(
+    rng: Optional[random.Random] = None,
+    *,
+    log: Optional[GameLog] = None,
+    player: Optional[int] = None,
+    player_name: Optional[str] = None,
+) -> Board:
     setup = Setup()
-    auto_place(setup)
+    auto_place(setup, rng, log=log, player=player, player_name=player_name)
     return setup.board
 
 
@@ -251,30 +298,34 @@ def ai_turn(engine: Engine, names: List[str], rng: random.Random) -> None:
             return
 
 
-def play(mode: str) -> None:
-    rng = random.Random()
+def play(mode: str, *, log: Optional[GameLog] = None, seed: Optional[int] = None) -> None:
+    rng = random.Random(seed)
     if mode == "hot-seat":
         names = ["Player 1", "Player 2"]
+        if log is not None:
+            log.append("game_start", mode=mode, players=list(names), size=Board.DEFAULT_SIZE)
         clear_screen()
-        board1 = human_placement(names[0])
+        board1 = human_placement(names[0], log=log, player=0)
         prompt("\nPress Enter to hand the keyboard to Player 2...")
         clear_screen()
-        board2 = human_placement(names[1])
+        board2 = human_placement(names[1], log=log, player=1)
         prompt("\nPress Enter to start the battle...")
         clear_screen()
         boards = [board1, board2]
         is_human = [True, True]
     else:
         names = ["Player", "Computer"]
+        if log is not None:
+            log.append("game_start", mode=mode, players=list(names), size=Board.DEFAULT_SIZE)
         clear_screen()
-        board_human = human_placement(names[0])
-        board_ai = ai_placement()
+        board_human = human_placement(names[0], log=log, player=0)
+        board_ai = ai_placement(rng, log=log, player=1, player_name=names[1])
         prompt("\nPress Enter to start the battle...")
         clear_screen()
         boards = [board_human, board_ai]
         is_human = [True, False]
 
-    engine = Engine(boards=boards)
+    engine = Engine(boards=boards, log=log, player_names=list(names))
 
     while not engine.is_over():
         if is_human[engine.current]:
@@ -282,7 +333,7 @@ def play(mode: str) -> None:
         else:
             print(f"\n{names[engine.current]}'s turn")
             ai_turn(engine, names, rng)
-        if mode == "hot-seat" and not engine.is_over() and is_human[engine.current]:
+        if mode == "hot-seat" and not engine.is_over():
             prompt(f"\nPress Enter to hand the keyboard to {names[engine.current]}...")
             clear_screen()
 
@@ -296,13 +347,38 @@ def play(mode: str) -> None:
     print(boards[1].render())
 
 
-def main() -> int:
+def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Play Battleship in the terminal.")
+    parser.add_argument(
+        "--log",
+        type=Path,
+        help="Write a JSON log of the game to this path on exit.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        help="Optional RNG seed for reproducible AI / auto-placement.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = parse_args(argv)
+    log = GameLog() if args.log is not None else None
     try:
         mode = choose_mode()
-        play(mode)
+        play(mode, log=log, seed=args.seed)
     except KeyboardInterrupt:
         print("\nInterrupted. Goodbye!")
+        if log is not None and args.log is not None:
+            log.append("interrupted")
+            log.save(args.log)
+            print(f"Partial log saved to {args.log}")
         return 130
+    finally:
+        if log is not None and args.log is not None and not log.has("interrupted"):
+            log.save(args.log)
+            print(f"\nLog saved to {args.log}")
     return 0
 
 

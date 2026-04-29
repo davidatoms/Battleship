@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Battleship</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Battleship</h1>
+    <div class="topbar-actions">
+      <button id="btn-download-log" type="button">Download log (JSON)</button>
+      <button id="btn-new-game" type="button">New game</button>
+    </div>
+  </header>
+
+  <main id="app"></main>
+
+  <div id="curtain" class="curtain hidden" role="dialog" aria-modal="true">
+    <div class="curtain-inner">
+      <h2 id="curtain-text">Pass the device</h2>
+      <p id="curtain-sub">When you are ready, tap the button.</p>
+      <button id="curtain-btn" type="button">I'm ready</button>
+    </div>
+  </div>
+
+  <template id="tpl-new-game">
+    <section class="card center">
+      <h2>Start a new game</h2>
+      <p class="muted">Two players take turns on the same screen.</p>
+      <form id="new-game-form" class="stacked">
+        <label>
+          Player 1 name
+          <input type="text" name="p1" value="Player 1" maxlength="32" required />
+        </label>
+        <label>
+          Player 2 name
+          <input type="text" name="p2" value="Player 2" maxlength="32" required />
+        </label>
+        <button type="submit" class="primary">Start game</button>
+      </form>
+    </section>
+  </template>
+
+  <template id="tpl-setup">
+    <section class="card">
+      <h2 id="setup-title">Placing fleet</h2>
+      <p class="muted" id="setup-instructions">
+        Hover over the grid to preview your ship, then click to place.
+        Use the rotate button to change direction.
+      </p>
+      <div class="setup-row">
+        <div class="board-wrap">
+          <div id="setup-grid" class="grid setup-grid"></div>
+        </div>
+        <aside class="side-panel">
+          <h3>Ship to place</h3>
+          <p id="ship-info" class="ship-info"></p>
+          <div class="orientation-row">
+            <span>Orientation:</span>
+            <button type="button" class="orient-btn" data-orient="0">North</button>
+            <button type="button" class="orient-btn" data-orient="90">East</button>
+            <button type="button" class="orient-btn" data-orient="180">South</button>
+            <button type="button" class="orient-btn" data-orient="270">West</button>
+          </div>
+          <button id="btn-rotate" type="button">Rotate</button>
+          <button id="btn-auto" type="button">Auto-place all</button>
+          <button id="btn-finish" type="button" class="primary" disabled>Done</button>
+          <h3>Placed</h3>
+          <ul id="placed-list" class="ship-list"></ul>
+          <h3>Remaining</h3>
+          <ul id="remaining-list" class="ship-list"></ul>
+        </aside>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-battle">
+    <section class="card">
+      <h2 id="battle-title"></h2>
+      <p id="last-shot" class="last-shot"></p>
+      <div class="battle-row">
+        <div class="board-wrap">
+          <h3 id="opp-title">Opponent's waters</h3>
+          <p class="muted">Click a cell to fire.</p>
+          <div id="opp-grid" class="grid"></div>
+        </div>
+        <div class="board-wrap">
+          <h3 id="own-title">Your fleet</h3>
+          <p class="muted">Hits taken on your ships are shown here.</p>
+          <div id="own-grid" class="grid"></div>
+          <ul id="own-fleet" class="ship-list"></ul>
+        </div>
+      </div>
+    </section>
+  </template>
+
+  <template id="tpl-ended">
+    <section class="card center">
+      <h2 id="winner-banner"></h2>
+      <p class="muted">Both fleets revealed:</p>
+      <div class="battle-row">
+        <div class="board-wrap">
+          <h3 id="end-name-0"></h3>
+          <div id="end-grid-0" class="grid"></div>
+        </div>
+        <div class="board-wrap">
+          <h3 id="end-name-1"></h3>
+          <div id="end-grid-1" class="grid"></div>
+        </div>
+      </div>
+      <button id="btn-end-new" type="button" class="primary">Play again</button>
+    </section>
+  </template>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
