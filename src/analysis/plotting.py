@@ -173,3 +173,54 @@ def plot_aggregate_hit_vs_miss(
     )
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     return fig
+
+
+def plot_placement_density_heatmap(
+    counts: np.ndarray,
+    *,
+    title: str = "Occupancy over valid fleet completions",
+    cmap: str = "YlOrRd",
+    annotate: bool = True,
+):
+    """Heatmap of per-cell completion counts (fixed first ship + remaining fleet)."""
+    import matplotlib.pyplot as plt
+
+    n, m = counts.shape
+    fig, ax = plt.subplots(figsize=(8, 7))
+    im = ax.imshow(
+        counts,
+        origin="upper",
+        cmap=cmap,
+        interpolation="nearest",
+    )
+    ax.set_title(title, fontsize=12)
+    ax.set_xticks(range(m))
+    ax.set_xticklabels([chr(ord("A") + j) for j in range(m)], fontsize=9)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([str(i + 1) for i in range(n)], fontsize=9)
+
+    vmax = float(counts.max(initial=0))
+    cbar = plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    if vmax > 0:
+        from matplotlib import ticker
+
+        cbar.ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=8))
+
+    if annotate:
+        max_val = counts.max(initial=0)
+        for i in range(n):
+            for j in range(m):
+                v = int(counts[i, j])
+                if v == 0 and max_val == 0:
+                    continue
+                color = (
+                    "#0f172a"
+                    if counts[i, j] < max(max_val * 0.55, 1e-9)
+                    else "white"
+                )
+                ax.text(j, i, str(v), ha="center", va="center", fontsize=8, color=color)
+
+    ax.set_xlabel("Column")
+    ax.set_ylabel("Row")
+    fig.tight_layout()
+    return fig

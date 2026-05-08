@@ -432,6 +432,67 @@ btnDownloadLog.addEventListener("click", () => {
   window.location.href = "/api/log/download";
 });
 
+const btnDownloadBundle = document.getElementById("btn-download-bundle");
+const bundlePerTurnToggle = document.getElementById("bundle-per-turn");
+const bundleWell3dToggle = document.getElementById("bundle-well-3d");
+const bundleStepsToggle = document.getElementById("bundle-steps");
+const bundleStepsMaxInput = document.getElementById("bundle-steps-max");
+if (btnDownloadBundle) {
+  btnDownloadBundle.addEventListener("click", async () => {
+    const perTurn = bundlePerTurnToggle && bundlePerTurnToggle.checked;
+    const well3d = bundleWell3dToggle && bundleWell3dToggle.checked;
+    const steps = bundleStepsToggle && bundleStepsToggle.checked;
+    const params = new URLSearchParams();
+    if (perTurn) {
+      params.set("per_turn", "1");
+      params.set("max_turns", "30");
+    }
+    if (well3d) {
+      params.set("well", "1");
+    }
+    if (steps) {
+      params.set("steps", "1");
+      const cap = bundleStepsMaxInput && bundleStepsMaxInput.value.trim();
+      if (cap) {
+        const n = parseInt(cap, 10);
+        if (!Number.isNaN(n) && n > 0) {
+          params.set("steps_max", String(n));
+        }
+      }
+    }
+    const url = `/api/log/bundle${params.toString() ? "?" + params : ""}`;
+    const original = btnDownloadBundle.textContent;
+    btnDownloadBundle.disabled = true;
+    btnDownloadBundle.textContent = "Building bundle...";
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        let msg = `HTTP ${res.status}`;
+        try {
+          const data = await res.json();
+          if (data && data.error) msg = data.error;
+        } catch (_) {
+          /* ignore */
+        }
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = "battleship-bundle.zip";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    } catch (err) {
+      flashError(`Bundle failed: ${err.message}`);
+    } finally {
+      btnDownloadBundle.disabled = false;
+      btnDownloadBundle.textContent = original;
+    }
+  });
+}
+
 btnNewGame.addEventListener("click", () => {
   state.serverState = null;
   state.lastRevealed = { phase: null, placing: null, current: null };

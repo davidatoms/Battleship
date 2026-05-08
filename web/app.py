@@ -16,6 +16,8 @@ from __future__ import annotations
 import os
 import random
 import sys
+import tempfile
+import zipfile
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
@@ -29,6 +31,7 @@ if str(ROOT) not in sys.path:
 from flask import Flask, jsonify, render_template, request, send_file  # noqa: E402
 
 from src.board import Board, SHIP_CELL, WATER  # noqa: E402
+from src.rules import default_rules, fleet_specs_as_json  # noqa: E402
 from src.game.engine import Engine  # noqa: E402
 from src.game.log import GameLog  # noqa: E402
 from src.setup import Setup  # noqa: E402
@@ -38,10 +41,15 @@ from src.ship import EAST, NORTH, SOUTH, WEST  # noqa: E402
 CARDINAL_ORIENTATIONS = (NORTH, EAST, SOUTH, WEST)
 
 
+def _paired_setups() -> List[Setup]:
+    r = default_rules()
+    return [Setup(rules=r), Setup(rules=r)]
+
+
 @dataclass
 class GameState:
     phase: str = "idle"  # "idle" | "setup" | "battle" | "ended"
-    setups: List[Setup] = field(default_factory=lambda: [Setup(), Setup()])
+    setups: List[Setup] = field(default_factory=_paired_setups)
     placing: int = 0
     engine: Optional[Engine] = None
     log: GameLog = field(default_factory=GameLog)
@@ -51,17 +59,19 @@ class GameState:
 
     def reset(self, names: Optional[List[str]] = None) -> None:
         self.phase = "setup"
-        self.setups = [Setup(), Setup()]
+        self.setups = _paired_setups()
         self.placing = 0
         self.engine = None
         self.log = GameLog()
         if names is not None:
             self.player_names = list(names)
+        session_rules = default_rules()
         self.log.append(
             "game_start",
             mode="hot-seat-web",
             players=list(self.player_names),
-            size=self.setups[0].board.size,
+            size=session_rules.board_size,
+            fleet=fleet_specs_as_json(session_rules),
         )
 
 
@@ -317,6 +327,100 @@ def api_log_download():
         mimetype="application/json",
         as_attachment=True,
         download_name="battleship-log.json",
+    )
+
+
+def _truthy(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    return value.lower() in ("1", "true", "yes", "on")
+
+
+@app.get("/api/log/bundle")
+def api_log_bundle():
+    """Return a ZIP containing the JSON log and probability-field PNGs.
+
+    Query parameters:
+        per_turn: include a 4-panel figure per shot (default: false)
+        max_turns: cap on per-turn figures (default: 20)
+        shooter: 0 or 1 to restrict per-turn figures
+        resolution: continuous-field pixels per side (default: 240)
+        steps: include step CSV + JSON manifest + per-step heatmaps
+        steps_max: cap exported step rows / PNG sets (optional)
+        well: include 3-D rotating well GIFs per turn (slow)
+        well_pivot: max_prob or shot_cell
+    """
+    per_turn = _truthy(request.args.get("per_turn"))
+    well_3d = _truthy(request.args.get("well"))
+    step_csv = _truthy(request.args.get("steps"))
+    steps_max_raw = request.args.get("steps_max")
+    step_max_steps: Optional[int] = None
+    if steps_max_raw not in (None, ""):
+        try:
+            step_max_steps = int(steps_max_raw)
+        except ValueError:
+            step_max_steps = None
+    pivot_raw = request.args.get("well_pivot", "max_prob")
+    well_pivot = pivot_raw if pivot_raw in ("max_prob", "shot_cell") else "max_prob"
+    try:
+        max_turns = int(request.args.get("max_turns", "20"))
+    except ValueError:
+        max_turns = 20
+    try:
+        resolution = int(request.args.get("resolution", "240"))
+    except ValueError:
+        resolution = 240
+    shooter_raw = request.args.get("shooter")
+    shooter: Optional[int] = None
+    if shooter_raw in ("0", "1"):
+        shooter = int(shooter_raw)
+
+    from src.analysis.visualize import visualise_log
+
+    with _state_lock:
+        log_json = _state.log.to_json()
+        log_snapshot = _state.log
+
+    with tempfile.TemporaryDirectory(prefix="bship-bundle-") as tmpdir:
+        tmp = Path(tmpdir)
+        log_path = tmp / "battleship-log.json"
+        log_path.write_text(log_json, encoding="utf-8")
+        viz_dir = tmp / "visualizations"
+        try:
+            visualise_log(
+                log_snapshot,
+                viz_dir,
+                shooter=shooter,
+                resolution=resolution,
+                per_turn=per_turn,
+                max_turns=max_turns,
+                label="battleship-log.json",
+                well_3d=well_3d,
+                well_pivot=well_pivot,
+                step_csv=step_csv,
+                step_max_steps=step_max_steps,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            return jsonify({"error": f"visualisation failed: {exc}"}), 500
+
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(log_path, arcname=log_path.name)
+            if viz_dir.exists():
+                for asset in sorted(viz_dir.iterdir()):
+                    if asset.is_file() and asset.suffix.lower() in (
+                        ".png",
+                        ".gif",
+                        ".csv",
+                        ".json",
+                    ):
+                        zf.write(asset, arcname=f"visualizations/{asset.name}")
+        buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="battleship-bundle.zip",
     )
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 from .board import Board
+from .rules import HouseRules, build_fleet_from_rules, default_rules
 from .ship import EAST, NORTH, SOUTH, WEST, Ship, standard_fleet
 
 
@@ -45,9 +46,17 @@ class Setup:
         self,
         board: Optional[Board] = None,
         fleet: Optional[Sequence[Ship]] = None,
+        *,
+        rules: Optional[HouseRules] = None,
     ) -> None:
-        self.board = board if board is not None else Board()
-        self.fleet: List[Ship] = list(fleet) if fleet is not None else standard_fleet()
+        if rules is not None:
+            self.board = board if board is not None else Board(size=rules.board_size)
+            self.fleet = (
+                list(fleet) if fleet is not None else build_fleet_from_rules(rules)
+            )
+        else:
+            self.board = board if board is not None else Board()
+            self.fleet = list(fleet) if fleet is not None else standard_fleet()
         self.cursor: Tuple[int, int] = (0, 0)
         self._index = 0
         self._sync_anchor()

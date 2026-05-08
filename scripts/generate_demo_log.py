@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.board import Board  # noqa: E402
+from src.rules import default_rules, fleet_specs_as_json  # noqa: E402
 from src.game.engine import Engine  # noqa: E402
 from src.game.log import GameLog  # noqa: E402
 from src.setup import Setup  # noqa: E402
@@ -48,8 +48,15 @@ def auto_place(setup: Setup, rng: random.Random, *, log: GameLog, player: int, n
 def play(seed: int, output: Path) -> Path:
     rng = random.Random(seed)
     log = GameLog()
-    log.append("game_start", players=["Alice", "Bob"], size=10, mode="demo")
-    setups = [Setup(), Setup()]
+    session_rules = default_rules()
+    log.append(
+        "game_start",
+        players=["Alice", "Bob"],
+        size=session_rules.board_size,
+        mode="demo",
+        fleet=fleet_specs_as_json(session_rules),
+    )
+    setups = [Setup(rules=session_rules), Setup(rules=session_rules)]
     auto_place(setups[0], rng, log=log, player=0, name="Alice")
     auto_place(setups[1], rng, log=log, player=1, name="Bob")
     boards = [setups[0].board, setups[1].board]

@@ -2,19 +2,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from ..board import Board
+from ..rules import house_rules_from_events, partition_fleet_after_sinks
 from .probability import MISS, OPEN_HIT, SUNK, UNKNOWN
-
-
-def _board_size_from_events(events: Sequence[Dict[str, Any]]) -> int:
-    for ev in events:
-        if ev.get("type") == "game_start" and "size" in ev:
-            return int(ev["size"])
-    return Board.DEFAULT_SIZE
 
 
 def _opponent_ships(
@@ -53,7 +48,8 @@ def replay_state(
         up_to_index = len(events)
     truncated = list(events[: max(0, up_to_index)])
 
-    size = _board_size_from_events(events)
+    rules = house_rules_from_events(events)
+    size = rules.board_size
     view = np.full((size, size), UNKNOWN, dtype="<U1")
 
     opponent = 1 - shooter
@@ -79,26 +75,29 @@ def replay_state(
                 view[r, c] = OPEN_HIT
         elif outcome == "sunk":
             ship_name = ev.get("sunk_ship")
-            if ship_name and ship_name in opp_ships:
-                for rr, cc in opp_ships[ship_name]:
+            if ship_name:
+                sunk_names.append(str(ship_name))
+            if ship_name and opp_ships and str(ship_name) in opp_ships:
+                for rr, cc in opp_ships[str(ship_name)]:
                     if 0 <= rr < size and 0 <= cc < size:
                         view[rr, cc] = SUNK
-                sunk_names.append(ship_name)
             else:
                 view[r, c] = SUNK
 
     alive: List[int] = []
     sunk: List[int] = []
-    for name, cells in opp_ships.items():
-        if name in sunk_names:
-            sunk.append(len(cells))
-        else:
-            alive.append(len(cells))
-
-    if not opp_ships:
-        # Log lacks placement events (e.g. partial log). Fall back to a
-        # standard fleet of [5,4,3,3,2] for the alive count.
-        alive = [5, 4, 3, 3, 2]
+    if opp_ships:
+        pending = Counter(sunk_names)
+        for name, cells in opp_ships.items():
+            if pending.get(name, 0) > 0:
+                sunk.append(len(cells))
+                pending[name] -= 1
+            else:
+                alive.append(len(cells))
+    else:
+        sunk_specs, alive_specs = partition_fleet_after_sinks(rules, sunk_names)
+        sunk = [s.length for s in sunk_specs]
+        alive = sorted((s.length for s in alive_specs), reverse=True)
 
     return view, alive, sunk
 

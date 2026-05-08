@@ -81,6 +81,47 @@ def test_log_download_returns_json(client):
     assert '"placement"' in body
 
 
+def test_log_bundle_returns_zip_with_log_and_visualisations(client):
+    pytest.importorskip("matplotlib")
+    _post(client, "/api/new_game", {"names": ["Alice", "Bob"]})
+    _post(client, "/api/auto_place")
+    _post(client, "/api/finish_setup")
+    _post(client, "/api/auto_place")
+    _post(client, "/api/finish_setup")
+    state = client.get("/api/state").get_json()
+    size = state["size"]
+    # Fire a handful of shots so the aggregate has both hits and misses.
+    safety = 0
+    while safety < 30:
+        safety += 1
+        cur = state["current"]
+        opp = 1 - cur
+        view = state["opponent_views"][opp]
+        target = None
+        for r in range(size):
+            for c in range(size):
+                if view[r][c] not in ("X", "o"):
+                    target = (r, c)
+                    break
+            if target:
+                break
+        assert target is not None
+        state = _post(client, "/api/shoot", {"row": target[0], "col": target[1]}).get_json()
+        if state.get("phase") == "ended":
+            break
+
+    res = client.get("/api/log/bundle")
+    assert res.status_code == 200
+    assert res.mimetype == "application/zip"
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(res.get_data()), "r") as zf:
+        names = zf.namelist()
+        assert "battleship-log.json" in names
+        assert any(n.startswith("visualizations/") and n.endswith(".png") for n in names)
+
+
 def test_place_at_rejects_out_of_bounds(client):
     _post(client, "/api/new_game", {"names": ["A", "B"]})
     res = _post(client, "/api/place_at", {"row": 0, "col": 6, "orientation": 90})

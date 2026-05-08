@@ -117,5 +117,7 @@ class Destroyer(Ship):
 
 
 def standard_fleet() -> List[Ship]:
-    """Return a fresh standard fleet: Carrier, Battleship, Cruiser, Submarine, Destroyer."""
-    return [Carrier(), Battleship(), Cruiser(), Submarine(), Destroyer()]
+    """Return a fresh standard fleet from :mod:`~src.rules` defaults."""
+    from .rules import build_fleet_from_rules, default_rules
+
+    return build_fleet_from_rules(default_rules())

@@ -32,4 +32,12 @@ __all__ = [
     "counterfactual_outcomes",
     "replay_state",
     "build_view_from_board",
+    "visualise_log",
 ]
+
+
+def __getattr__(name):  # noqa: D401 -- module-level lazy import
+    if name == "visualise_log":
+        from .visualize import visualise_log
+        return visualise_log
+    raise AttributeError(name)

@@ -26,10 +26,12 @@ from typing import List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.board import Board  # noqa: E402
+from src.rules import default_rules, fleet_specs_as_json  # noqa: E402
 from src.game.engine import Engine  # noqa: E402
 from src.game.log import GameLog  # noqa: E402
 from src.setup import Setup  # noqa: E402
 from src.ship import EAST, NORTH, SOUTH, WEST  # noqa: E402
+from strategies import EnsembleAI, HeuristicAI, HybridAI, RLAgent  # noqa: E402
 
 CARDINAL_ORIENTATIONS = (NORTH, EAST, SOUTH, WEST)
 
@@ -70,16 +72,28 @@ def choose_mode() -> str:
     print("Battleship")
     print("==========")
     print("  1) Hot-seat (two humans on this machine)")
-    print("  2) Single player vs. AI")
+    print("  2) Single player vs. Random AI")
+    print("  3) Single player vs. Heuristic AI")
+    print("  4) Single player vs. RL Model")
+    print("  5) Single player vs. Hybrid (Prob + Heur)")
+    print("  6) Single player vs. Ensemble (Multi-Expert)")
     while True:
-        choice = prompt("Choose mode [1/2]: ").lower()
+        choice = prompt("Choose mode [1/2/3/4/5/6]: ").lower()
         if choice in ("1", "hot-seat", "hotseat", "h"):
             return "hot-seat"
-        if choice in ("2", "ai", "vs-ai", "computer", "c"):
-            return "vs-ai"
+        if choice in ("2", "random", "r"):
+            return "vs-ai-random"
+        if choice in ("3", "heuristic", "he"):
+            return "vs-ai-heuristic"
+        if choice in ("4", "rl", "ml"):
+            return "vs-ai-rl"
+        if choice in ("5", "hybrid", "hy"):
+            return "vs-ai-hybrid"
+        if choice in ("6", "ensemble", "e"):
+            return "vs-ai-ensemble"
         if choice in ("quit", "q", "exit"):
             sys.exit(0)
-        print("Please enter 1 or 2.")
+        print("Please enter 1, 2, 3, 4, 5, or 6.")
 
 
 def auto_place(
@@ -300,10 +314,20 @@ def ai_turn(engine: Engine, names: List[str], rng: random.Random) -> None:
 
 def play(mode: str, *, log: Optional[GameLog] = None, seed: Optional[int] = None) -> None:
     rng = random.Random(seed)
+    ai_obj = None
+    session_rules = default_rules()
+    fleet_snap = fleet_specs_as_json(session_rules)
+    board_size = session_rules.board_size
     if mode == "hot-seat":
         names = ["Player 1", "Player 2"]
         if log is not None:
-            log.append("game_start", mode=mode, players=list(names), size=Board.DEFAULT_SIZE)
+            log.append(
+                "game_start",
+                mode=mode,
+                players=list(names),
+                size=board_size,
+                fleet=fleet_snap,
+            )
         clear_screen()
         board1 = human_placement(names[0], log=log, player=0)
         prompt("\nPress Enter to hand the keyboard to Player 2...")
@@ -316,7 +340,13 @@ def play(mode: str, *, log: Optional[GameLog] = None, seed: Optional[int] = None
     else:
         names = ["Player", "Computer"]
         if log is not None:
-            log.append("game_start", mode=mode, players=list(names), size=Board.DEFAULT_SIZE)
+            log.append(
+                "game_start",
+                mode=mode,
+                players=list(names),
+                size=board_size,
+                fleet=fleet_snap,
+            )
         clear_screen()
         board_human = human_placement(names[0], log=log, player=0)
         board_ai = ai_placement(rng, log=log, player=1, player_name=names[1])
@@ -324,6 +354,21 @@ def play(mode: str, *, log: Optional[GameLog] = None, seed: Optional[int] = None
         clear_screen()
         boards = [board_human, board_ai]
         is_human = [True, False]
+        
+        if mode == "vs-ai-heuristic":
+            ai_obj = HeuristicAI(seed=seed)
+        elif mode == "vs-ai-rl":
+            ai_obj = RLAgent(epsilon=0) # No exploration during play
+            q_table_path = Path(__file__).parent / "ml" / "q_table.npy"
+            if q_table_path.exists():
+                ai_obj.load_q_table(str(q_table_path))
+            else:
+                print("\nWarning: No pre-trained RL model found at ml/q_table.npy.")
+                print("The RL agent will play with a blank Q-table.")
+        elif mode == "vs-ai-hybrid":
+            ai_obj = HybridAI(seed=seed)
+        elif mode == "vs-ai-ensemble":
+            ai_obj = EnsembleAI(seed=seed)
 
     engine = Engine(boards=boards, log=log, player_names=list(names))
 
@@ -332,7 +377,11 @@ def play(mode: str, *, log: Optional[GameLog] = None, seed: Optional[int] = None
             human_turn(engine, names)
         else:
             print(f"\n{names[engine.current]}'s turn")
-            ai_turn(engine, names, rng)
+            if ai_obj is not None:
+                result = ai_obj.take_turn(engine)
+                print(shot_summary(result, names))
+            else:
+                ai_turn(engine, names, rng)
         if mode == "hot-seat" and not engine.is_over():
             prompt(f"\nPress Enter to hand the keyboard to {names[engine.current]}...")
             clear_screen()
@@ -359,26 +408,151 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         type=int,
         help="Optional RNG seed for reproducible AI / auto-placement.",
     )
+    parser.add_argument(
+        "--visualize",
+        action="store_true",
+        help=(
+            "After saving the log, also render probability-field PNGs "
+            "next to it. Requires --log."
+        ),
+    )
+    parser.add_argument(
+        "--viz-dir",
+        type=Path,
+        default=None,
+        help="Override the visualisation output directory (default: <log>-viz/).",
+    )
+    parser.add_argument(
+        "--viz-per-turn",
+        action="store_true",
+        help="Include a 4-panel figure for each shot (default: aggregate only).",
+    )
+    parser.add_argument(
+        "--viz-max-turns",
+        type=int,
+        default=20,
+        help="Cap the number of per-turn figures.",
+    )
+    parser.add_argument(
+        "--viz-shooter",
+        type=int,
+        choices=(0, 1),
+        default=None,
+        help="Restrict per-turn figures to this shooter (0 or 1).",
+    )
+    parser.add_argument(
+        "--viz-resolution",
+        type=int,
+        default=240,
+        help="Pixels per side for the continuous energy fields.",
+    )
+    parser.add_argument(
+        "--viz-3d",
+        action="store_true",
+        help=(
+            "Also render a 360-degree rotating 3-D 'energy well' GIF for "
+            "each per-turn frame plus an aggregate well animation."
+        ),
+    )
+    parser.add_argument(
+        "--viz-3d-pivot",
+        choices=("max_prob", "shot_cell"),
+        default="max_prob",
+        help=(
+            "What to orbit the camera around: 'max_prob' (deepest well "
+            "= most-likely ship cell) or 'shot_cell' (the cell actually "
+            "fired at that turn)."
+        ),
+    )
+    parser.add_argument(
+        "--viz-steps",
+        action="store_true",
+        help=(
+            "Also write a per-step single-panel heatmap for each turn "
+            "(prior / if hit / if miss) plus a steps.csv index file "
+            "linking each turn's metadata to its image paths."
+        ),
+    )
+    parser.add_argument(
+        "--viz-steps-no-prior",
+        action="store_true",
+        help="With --viz-steps, skip rendering the per-step prior PNG.",
+    )
+    parser.add_argument(
+        "--viz-steps-max",
+        type=int,
+        default=None,
+        help=(
+            "Cap how many step rows / PNG sets are written "
+            "(default: every eligible turn). Also writes steps_manifest.json."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def _write_visualisations(log: GameLog, log_path: Path, args: argparse.Namespace) -> None:
+    from src.analysis.visualize import visualise_log
+
+    viz_dir = args.viz_dir or log_path.with_name(log_path.stem + "-viz")
+    print(f"\nRendering visualisations into {viz_dir} ...")
+    generated = visualise_log(
+        log,
+        viz_dir,
+        shooter=args.viz_shooter,
+        resolution=args.viz_resolution,
+        per_turn=args.viz_per_turn,
+        max_turns=args.viz_max_turns,
+        label=log_path.name,
+        well_3d=args.viz_3d,
+        well_pivot=args.viz_3d_pivot,
+        step_csv=args.viz_steps,
+        step_include_prior=not args.viz_steps_no_prior,
+        step_max_steps=args.viz_steps_max,
+    )
+    print(f"Wrote {len(generated)} visualisation(s).")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    log = GameLog() if args.log is not None else None
+    if args.visualize and args.log is None:
+        print("--visualize requires --log", file=sys.stderr)
+        return 2
+
+    # Automatic logging setup
+    log_dir = Path("game_logs")
+    log_dir.mkdir(exist_ok=True)
+    
+    if args.log is not None:
+        log_path = args.log
+    else:
+        import datetime
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = log_dir / f"game_{timestamp}.json"
+
+    log = GameLog()
     try:
         mode = choose_mode()
         play(mode, log=log, seed=args.seed)
     except KeyboardInterrupt:
         print("\nInterrupted. Goodbye!")
-        if log is not None and args.log is not None:
-            log.append("interrupted")
-            log.save(args.log)
-            print(f"Partial log saved to {args.log}")
+        log.append("interrupted")
+        log.save(log_path)
+        print(f"Partial log saved to {log_path}")
+        if args.visualize:
+            try:
+                _write_visualisations(log, log_path, args)
+            except Exception as exc:
+                print(f"Visualisation failed: {exc}", file=sys.stderr)
         return 130
     finally:
-        if log is not None and args.log is not None and not log.has("interrupted"):
-            log.save(args.log)
-            print(f"\nLog saved to {args.log}")
+        if not log.has("interrupted"):
+            log.save(log_path)
+            print(f"\nLog saved to {log_path}")
+            if args.visualize:
+                try:
+                    _write_visualisations(log, log_path, args)
+                except Exception as exc:
+                    print(f"Visualisation failed: {exc}", file=sys.stderr)
     return 0
 
 
